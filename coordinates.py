@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy
+from numpy import ndarray
 
 # from . import units
 from grand.libs import turtle
@@ -20,6 +22,70 @@ __all__ = ['CartesianCoordinates', 'CartesianPoint', 'CartesianVector',
 
 _HAS_GEOMAGNET: bool = False # Differ the import of the geomagnet module
                              # in order to avoid circular references
+
+
+def _cartesian_to_geodetic(xyz: ndarray) -> Tuple[Union[float, ndarray]]:
+    '''Transform Cartesian coordinates to geodetic ones
+    '''
+    ecef = xyz.flatten(order='C')
+    return turtle.ecef_to_geodetic(ecef)
+
+
+_cartesian_to_geodetic_u = _units.wraps(
+    (_units.deg, _units.deg, _units.m), _units.m)(_cartesian_to_geodetic)
+
+
+def _geodetic_to_cartesian(latitude: Union[float, ndarray],
+                           longitude: Union[float, ndarray],
+                           height: Union[float, ndarray])                      \
+                           -> Quantity:
+    '''Transform geodetic coordinates to Cartesian ones
+    '''
+    return turtle.ecef_from_geodetic(latitude, longitude, height)
+
+
+_geodetic_to_cartesian_u = _units.wraps(
+    _units.m, (_units.deg, _units.deg, _units.m))(_geodetic_to_cartesian)
+
+
+def _cartesian_to_spherical(xyz: ndarray) -> Tuple[ndarray]:
+
+    x, y, z = xyz
+    rho2 = x**2 + y**2
+    rho = numpy.sqrt(rho2)
+    theta = numpy.arctan2(rho, z)
+
+    if theta == 0:
+        phi = 0
+    else:
+        phi = numpy.arctan2(y, x)
+
+    r = numpy.sqrt(rho2 + z**2)
+
+    return theta, phi, r
+
+
+_cartesian_to_spherical_u = _units.wraps(
+    (_units.rad, _units.rad, '=A'), '=A')(_cartesian_to_spherical)
+
+
+def _spherical_to_cartesian(theta: Union[float, ndarray],
+                            phi: Union[float, ndarray],
+                            r: Union[float, ndarray])                          \
+                            -> Quantity:
+
+    ct, st = numpy.cos(theta), numpy.sin(theta)
+
+    xyz = numpy.empty((theta.size, 3))
+    xyz[:, 0] = r * numpy.cos(phi) * st
+    xyz[:, 1] = r * numpy.sin(phi) * st
+    xyz[:, 2] = r * ct
+
+    return xyz
+
+
+_spherical_to_cartesian_u = _units.wraps(
+    '=A', (_units.rad, _units.rad, '=A'))(_spherical_to_cartesian)
 
 
 class Coordinates:
@@ -75,7 +141,7 @@ class CartesianCoordinates(Coordinates):
         return self.__class__(self.xyz.copy(), self.frame)
 
 
-    def itransform(self, frame: Frame) -> CartesianCoordinates:
+    def itransform_to(self, frame: Frame) -> CartesianCoordinates:
         if self.frame is None:
             raise ValueError('missing frame for coordinates')
         elif frame is self.frame:
@@ -107,8 +173,8 @@ class CartesianCoordinates(Coordinates):
         return self
 
 
-    def transform(self, frame: Frame) -> CartesianCoordinates:
-        return self.copy().itransform(frame)
+    def transform_to(self, frame: Frame) -> CartesianCoordinates:
+        return self.copy().itransform_to(frame)
 
 
     @property
@@ -157,27 +223,23 @@ class CartesianPoint(CartesianCoordinates, Point):
         if isinstance(coordinates, CartesianCoordinates):
             new = coordinates.copy()
         elif isinstance(coordinates, SphericalPoint):
-            new = cls._from_spherical(coordinates)
+            xyz = _spherical_to_cartesian_u(coordinates.theta, coordinates.phi,
+                                            coordinates.r)
+            new = cls(xyz, frame=coordinates.frame)
         elif isinstance(coordinates, GeodeticPoint):
-            new = cls._from_geodetic(coordinates)
+            xyz = _geodetic_to_cartesian_u(coordinates.latitude,
+                                           coordinates.longitude,
+                                           coordinates.height)
+            new = cls(xyz, frame=ECEF)
         else:
             raise NotImplemented(
                 f'expected an instance of CartesianCoordinates or Point. '
                 f'Got a {type(coordinates)} instead.')
 
         if frame:
-            new.itransform(frame)
+            new.itransform_to(frame)
 
         return new
-
-
-    @classmethod
-    def _from_geodetic(cls, coordinates: Coordinates):
-        ecef = turtle.ecef_from_geodetic(
-            coordinates.latitude.to(_units.deg).magnitude,
-            coordinates.longitude.to(_units.deg).magnitude,
-            coordinates.height.to(_units.m).magnitude)
-        return cls(Quantity(ecef, _units.m))
 
 
 class CartesianVector(CartesianCoordinates, Vector):
@@ -187,35 +249,56 @@ class CartesianVector(CartesianCoordinates, Vector):
         if isinstance(value, CartesianCoordinates):
             new = coordinates.copy()
         elif isinstance(coordinates, SphericalVector):
-            new = cls._from_spherical(coordinates)
+            xyz = _spherical_to_cartesian_u(coordinates.theta, coordinates.phi,
+                                            coordinates.r)
+            new = cls(xyz, frame=coordinates.frame)
         elif isinstance(coordinates, HorizontalVector):
-            new = cls._from_horizontal(coordinates)
+            xyz = _horizontal_to_cartesian_u(coordinates.latitude,
+                                             coordinates.longitude,
+                                             coordinate.height)
+            new = cls(xyz, frame=coordinates.frame)
         else:
             raise NotImplemented(
                 f'expected an instance of CartesianCoordinates or Vector. '
                 f'Got a {type(coordinates)} instead.')
 
         if frame:
-            new.itransform(frame)
+            new.itransform_to(frame)
 
         return new
 
 
-    @classmethod
-    def _from_horizontal(cls, coordinates: Coordinates):
-        ninety = Quantity(90, _units.deg)
-        theta = ninety - coordinates.elevation
-        phi = ninety - coordinates.azimuth
-        ct, st = numpy.cos(theta), numpy.sin(theta)
-        r = coordinates.r
+def _initialise_angular_coordinates(labels: Sequence[str],
+                                    variables: Sequence,
+                                    units: Union[Unit, Sequence[Unit], None])  \
+                                    -> Sequence:
 
-        xyz = numpy.empty((theta.size, 3))
-        xyz[:, 0] = r * numpy.cos(phi) * st
-        xyz[:, 1] = r * numpy.sin(phi) * st
-        xyz[:, 2] = r * ct
-        quantity = Quantity(xyz, r.units)
+    if isinstance(units, Unit):
+        units = (units, units)
 
-        return cls(quantity, self.frame)
+    results, size = [None, None, None], None
+    for i, var in enumerate(variables):
+        if var is None:
+            value = numpy.zeros(n) if n > 0 else 0
+            var = Quantity(value, units=_units.m)
+        else:
+            if not isinstance(var, Quantity):
+                try:
+                    var = Quantity(var, units[i])
+                except TypeError:
+                    raise ValueError(f'missing units for {labels[i]}')
+
+            try:
+                n = var.size
+            except AttributeError:
+                n = 0
+            if size is not None and n != size:
+                raise ValueError(
+                    '{labels[i - 1]}, {labels[i]} must have the same size.')
+            size = n
+        results[i] = var
+
+    return results
 
 
 @dataclass
@@ -229,54 +312,12 @@ class GeodeticPoint(Coordinates, Point):
                        longitude: Union[float, Quantity, Sequence],
                        height: Union[float, Quantity, Sequence, None]=None,
                        units: Union[Unit, Sequence[Unit], None]=None):
-        if isinstance(units, Unit):
-            units = (units, units)
 
-        if not isinstance(latitude, Quantity):
-            try:
-                latitude = Quantity(latitude, units[0])
-            except TypeError:
-                raise ValueError('missing units for latitude')
-
-        try:
-            l = latitude.size
-        except AttributeError:
-            l = 0
-
-        if not isinstance(longitude, Quantity):
-            try:
-                longitude = Quantity(longitude, units[1])
-            except TypeError:
-                raise ValueError('missing units for longitude')
-
-        try:
-            m = longitude.size
-        except AttributeError:
-            m = 0
-
-        if height is None:
-            n = l
-            value = numpy.zeros(n) if n > 0 else 0
-            height = Quantity(value, units=_units.m)
-        else:
-            if not isinstance(height, Quantity):
-                try:
-                    height = Quantity(height, units[2])
-                except TypeError:
-                    raise ValueError('missing units for height')
-
-            try:
-                m = height.size
-            except AttributeError:
-                m = 0
-
-        if (l != m) or (m != n):
-            raise ValueError(
-                'longitude, latitude and height must have the same size.')
-
-        self.latitude = latitude
-        self.longitude = longitude
-        self.height = height
+        self.latitude, self.longitude, self.height =                           \
+            _initialise_angular_coordinates(
+            ('latitude', 'longitude', 'height'),
+             (latitude, longitude, height),
+             units)
 
 
     @classmethod
@@ -284,32 +325,70 @@ class GeodeticPoint(Coordinates, Point):
         if isinstance(coordinates, GeodeticPoint):
             return coordinates.copy()
         elif isinstance(coordinates, CartesianPoint):
-            return cls._from_cartesian()
+            if coordinates.frame != ECEF:
+                coordinates = coordinates.transform_to(ECEF)
+            lat, lon, height = _cartesian_to_geodetic_u(coordinates.xyz)
+            return cls(lat, lon, height)
         elif isinstance(coordinates, SphericalPoint):
-            return cls._from_spherical()
+            if coordinates.frame != ECEF:
+                coordinates = coordinates.transform_to(ECEF)
+            lat, lon, height = _spherical_to_geodetic_u(coordinates.theta,
+                                                        coordinates.phi,
+                                                        coordinates.r)
+            return cls(lat, lon, height)
         else:
             raise NotImplemented(
                 f'expected an instance of GeodeticPoint or Point. '
                 f'Got a {type(coordinates)} instead.')
 
 
-    @classmethod
-    def _from_cartesian(cls, coordinates: CartesianCoordinates):
-        ecef = coordinates.xyz.flatten(order='C')
-        geodetic = turtle.ecef_to_geodetic(ecef)
-        latitude = Quantity(geodetic[0], _units.deg)
-        longitude = Quantity(geodetic[1], _units.deg)
-        height = Quantity(geodetic[2], _units.m)
-
-        return self.__class__(latitude, longitude, height)
+    def copy(self):
+        return copy.deepcopy(self)
 
 
-    def transform(self, frame: Frame) -> CartesianCoordinates:
-        pass
-
-
+@dataclass
 class SphericalCoordinates(Coordinates):
-    pass
+    theta: Quantity
+    phi: Quantity
+    r: Quantity
+
+
+    def __init__(self, theta: Union[float, Quantity, Sequence],
+                       phi: Union[float, Quantity, Sequence],
+                       r: Union[float, Quantity, Sequence, None]=None,
+                       frame: Frame=ECEF,
+                       units: Union[Unit, Sequence[Unit], None]=None):
+
+        self.theta, self.phi, self.r = _initialise_angular_coordinates(
+            ('latitude', 'longitude', 'height'),
+            (latitude, longitude, height),
+            units)
+        self.frame = frame
+
+
+    def copy(self):
+        new = copy.copy(self)
+        new.theta = self.theta.copy()
+        new.phi = self.phi.copy()
+        new.r = self.r.copy()
+        return new
+
+
+    def itransform(self, frame: Frame) -> SphericalCoordinates:
+        new = self.transform(frame)
+        self.theta[:] = new.theta
+        self.phi[:] = new.phi
+        self.r[:] = new.r
+        self.frame = frame
+        return self
+
+
+    def transform(self, frame: Frame) -> SphericalCoordinates:
+        xyz = _spherical_to_cartesian(self.theta, self.phi, self.r)
+        _cartesian_transform(xyz, frame)
+        theta, phi, r = _cartesian_to_spherical(xyz)
+
+        return self.__cls__(theta, phi, r, frame)
 
 
 class SphericalPoint(SphericalCoordinates, Point):
@@ -322,7 +401,7 @@ class SphericalVector(SphericalCoordinates, Vector):
 
 @dataclass
 class LtpFrame(Frame):
-    basis: numpy.ndarray
+    basis: ndarray
     origin: CartesianPoint
 
 
