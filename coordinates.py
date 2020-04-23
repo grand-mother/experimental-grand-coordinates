@@ -256,7 +256,7 @@ class CartesianCoordinates(Coordinates):
 
     def __init__(self, xyz: Union[Quantity, Sequence],
                        frame: Frame=ECEF,
-                       units: Quantity=None):
+                       units: Optional[Quantity]=None):
         if units is not None:
             xyz = Quantity(xyz, units)
         self.xyz = xyz
