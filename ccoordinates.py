@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from typing import NamedTuple, Optional, Sequence, Union
 import weakref
 
 import numpy
@@ -17,7 +17,7 @@ class Frame:
         self._c = ffi.new('struct grand_frame [1]')
 
 
-ECEF = Frame()
+ECEF = Frame() # XXX move to C
 
 
 class CoordinatesArray:
@@ -65,12 +65,22 @@ class CoordinatesArray:
 
 
     def size(self) -> int:
-        return int(self._c.size)
+        return int(self._c[0].size)
+
+
+class _CartesianViews(NamedTuple):
+    xyz: Quantity
+    x: Quantity
+    y: Quantity
+    z: Quantity
 
 
 class CartesianCoordinatesArray(CoordinatesArray):
+    _system = lib.GRAND_COORDINATES_CARTESIAN
+
     @classmethod
     def new(cls, xyz: Union[ndarray, Sequence],
+                 type_: int=0,
                  frame: Frame=ECEF,
                  units: Optional[Quantity]=None):
 
@@ -79,45 +89,114 @@ class CartesianCoordinatesArray(CoordinatesArray):
         elif not isinstance(xyz, Quantity):
             raise TypeError('missing unit')
 
-        size = xyz.size // 3 # XXX check size
-        self = cls(size, frame, xyz.units)
+        size = xyz.size // 3
+        if 3 * size != xyz.size:
+            raise ValueError('invalid data size')
+        self = cls(size, type_, frame, xyz.units)
         self.xyz.magnitude[:] = xyz.magnitude
 
         return self
 
 
     def __init__(self, size: int=0,
+                       type_: int=0, 
                        frame: Frame=ECEF,
                        units: Optional[Quantity]=None):
 
-        super().__init__(size, lib.GRAND_COORDINATES_POINT,
-                         lib.GRAND_COORDINATES_CARTESIAN, frame)
+        super().__init__(size, type_, self._system, frame)
+        self._set_views(units)
 
-        self._xyz = Quantity(numpy.reshape(self._data, (size, 3)), units)
-        self._x = self._xyz[:,0]
-        self._y = self._xyz[:,1]
-        self._z = self._xyz[:,2]
+
+    def _set_views(self, units):
+        xyz = Quantity(numpy.reshape(self._data,
+                                     (self._c[0].size, 3)), units)
+        x = xyz[:,0]
+        y = xyz[:,1]
+        z = xyz[:,2]
+        self._views = _CartesianViews(xyz, x, y, z)
 
 
     @property
     def xyz(self) -> Quantity:
-        return self._xyz
+        return self._views.xyz
 
 
     @property
     def x(self) -> Quantity:
-        return self._x
+        return self._views.x
 
 
     @property
     def y(self) -> Quantity:
-        return self._y
+        return self._views.y
 
 
     @property
     def z(self) -> Quantity:
-        return self._z
+        return self._views.z
 
 
 class CartesianCoordinates(CartesianCoordinatesArray):
-    pass # XXX Use as a scalar
+    @classmethod
+    def new(cls, xyz: Union[ndarray, Sequence],
+                 type_: int=0,
+                 frame: Frame=ECEF,
+                 units: Optional[Quantity]=None):
+        if units is not None:
+            xyz = Quantity(xyz, units)
+        elif not isinstance(xyz, Quantity):
+            raise TypeError('missing unit')
+
+        if xyz.size != 3:
+            raise ValueError('invalid data size')
+        self = cls(type_, frame, xyz.units)
+        self.xyz.magnitude[:] = xyz.magnitude
+
+        return self
+
+
+    def __init__(self, type_: int=0, 
+                       frame: Frame=ECEF,
+                       units: Optional[Quantity]=None):
+
+        super().__init__(1, type_, frame, units)
+
+
+    @property
+    def xyz(self) -> Quantity:
+        return self._views.xyz[0]
+
+
+    @xyz.setter
+    def xyz(self, value: Quantity) -> None:
+        self._views.xyz[0,:] = value
+
+
+    @property
+    def x(self) -> Quantity:
+        return self._views.x[0]
+
+
+    @x.setter
+    def x(self, value: Quantity) -> None:
+        self._views.x[0] = value
+
+
+    @property
+    def y(self) -> Quantity:
+        return self._views.y[0]
+
+
+    @y.setter
+    def y(self, value: Quantity) -> None:
+        self._views.y[0] = value
+
+
+    @property
+    def z(self) -> Quantity:
+        return self._views.z[0]
+
+
+    @z.setter
+    def z(self, value: Quantity) -> None:
+        self._views.z[0] = value
