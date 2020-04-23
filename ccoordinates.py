@@ -68,6 +68,14 @@ class CoordinatesArray:
         return int(self._c[0].size)
 
 
+class Coordinates(CoordinatesArray):
+    def __init__(self, units: Quantity,
+                       type_: int=0,
+                       frame: Frame=ECEF):
+
+        super().__init__(units, 1, type_, frame)
+
+
 class _CartesianViews(NamedTuple):
     xyz: Quantity
     x: Quantity
@@ -147,7 +155,7 @@ class CartesianCoordinatesArray(CoordinatesArray):
         return self._views.z
 
 
-class CartesianCoordinates(CartesianCoordinatesArray):
+class CartesianCoordinates(Coordinates, CartesianCoordinatesArray):
     @classmethod
     def new(cls, xyz: Union[Quantity, ndarray, Sequence],
                  type_: int=0,
@@ -163,13 +171,6 @@ class CartesianCoordinates(CartesianCoordinatesArray):
         self._views.xyz.magnitude[:] = xyz.magnitude
 
         return self
-
-
-    def __init__(self, units: Quantity,
-                       type_: int=0,
-                       frame: Frame=ECEF):
-
-        super().__init__(units, 1, type_, frame)
 
 
     @property
@@ -311,7 +312,7 @@ class SphericalCoordinatesArray(CoordinatesArray):
         return self._views.phi
 
 
-class SphericalCoordinates(SphericalCoordinatesArray):
+class SphericalCoordinates(Coordinates, SphericalCoordinatesArray):
     @classmethod
     def new(cls, r: Union[Quantity, float],
                  theta: Union[Quantity, float],
@@ -338,13 +339,6 @@ class SphericalCoordinates(SphericalCoordinatesArray):
         self._views.phi.magnitude[0] = phi.magnitude
 
         return self
-
-
-    def __init__(self, units: Quantity,
-                       type_: int=0,
-                       frame: Frame=ECEF):
-
-        super().__init__(units, 1, type_, frame)
 
 
     @property
