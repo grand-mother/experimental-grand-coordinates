@@ -20,6 +20,9 @@ struct grand_frame {
 };
 
 
+extern struct grand_frame * GRAND_ECEF;
+
+
 struct grand_coordinates_cartesian { double x, y, z; };
 struct grand_coordinates_geodetic { double latitude, longitude, height; };
 struct grand_coordinates_horizontal { double azimuth, elevation, norm; };

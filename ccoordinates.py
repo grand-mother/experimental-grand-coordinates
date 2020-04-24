@@ -12,12 +12,37 @@ Quantity, Unit = _units.Quantity, _units.Unit
 from _coordinates import ffi, lib
 
 
-class Frame:
+class FrameView:
+    def _set_view(self):
+        self._basis = numpy.frombuffer(ffi.buffer(self._c[0].basis, 72),
+                                       dtype=numpy.float64)
+        origin = numpy.frombuffer(ffi.buffer(self._c[0].origin, 24),
+                                  dtype=numpy.float64)
+        self._origin = Quantity(origin, _units.m)
+
+
+    @property
+    def basis(self):
+        return self._basis
+
+
+    @property
+    def origin(self):
+        return self._origin
+
+
+class Frame(FrameView):
     def __init__(self):
         self._c = ffi.new('struct grand_frame [1]')
+        self._set_view()
 
 
-ECEF = Frame() # XXX move to C
+ECEF = FrameView()
+ECEF._c = lib.GRAND_ECEF
+ECEF._set_view()
+ECEF.__class__ = Frame
+ECEF.basis.flags.writeable = False
+ECEF.origin.flags.writeable = False
 
 
 class CoordinatesArray:
@@ -75,14 +100,46 @@ class Coordinates(CoordinatesArray):
         super().__init__(units, 1, frame)
 
 
-class _CartesianViews(NamedTuple):
-    xyz: Quantity
-    x: Quantity
-    y: Quantity
-    z: Quantity
+class CartesianView:
+    class _CartesianViewData(NamedTuple):
+        xyz: Quantity
+        x: Quantity
+        y: Quantity
+        z: Quantity
 
 
-class CartesianCoordinatesArray(CoordinatesArray):
+    def _set_view(self, units):
+        xyz = Quantity(numpy.reshape(self._data,
+                                     (self._c[0].size, 3)), units)
+        x = xyz[:,0]
+        y = xyz[:,1]
+        z = xyz[:,2]
+        self._view = self._CartesianViewData(xyz, x, y, z)
+
+
+class CartesianCoordinatesArrayView(CartesianView):
+    @property
+    def xyz(self) -> Quantity:
+        return self._view.xyz
+
+
+    @property
+    def x(self) -> Quantity:
+        return self._view.x
+
+
+    @property
+    def y(self) -> Quantity:
+        return self._view.y
+
+
+    @property
+    def z(self) -> Quantity:
+        return self._view.z
+
+
+class CartesianCoordinatesArray(CoordinatesArray,
+                                CartesianCoordinatesArrayView):
     _system = lib.GRAND_COORDINATES_CARTESIAN
     _type = lib.GRAND_COORDINATES_UNDEFINED_TYPE
 
@@ -98,7 +155,7 @@ class CartesianCoordinatesArray(CoordinatesArray):
         if 3 * size != xyz.size:
             raise ValueError('invalid data size')
         self = cls(xyz.units, size, frame)
-        self._views.xyz.magnitude[:] = xyz.magnitude
+        self._view.xyz.magnitude[:] = xyz.magnitude
 
         return self
 
@@ -121,36 +178,7 @@ class CartesianCoordinatesArray(CoordinatesArray):
                        frame: Frame=ECEF):
 
         super().__init__(size, self._type, self._system, frame)
-        self._set_views(units)
-
-
-    def _set_views(self, units):
-        xyz = Quantity(numpy.reshape(self._data,
-                                     (self._c[0].size, 3)), units)
-        x = xyz[:,0]
-        y = xyz[:,1]
-        z = xyz[:,2]
-        self._views = _CartesianViews(xyz, x, y, z)
-
-
-    @property
-    def xyz(self) -> Quantity:
-        return self._views.xyz
-
-
-    @property
-    def x(self) -> Quantity:
-        return self._views.x
-
-
-    @property
-    def y(self) -> Quantity:
-        return self._views.y
-
-
-    @property
-    def z(self) -> Quantity:
-        return self._views.z
+        self._set_view(units)
 
 
 class CartesianPoints(CartesianCoordinatesArray):
@@ -161,7 +189,50 @@ class CartesianVectors(CartesianCoordinatesArray):
     _type = lib.GRAND_COORDINATES_VECTOR
 
 
-class CartesianCoordinates(Coordinates, CartesianCoordinatesArray):
+class CartesianCoordinatesView(CartesianView):
+    @property
+    def xyz(self) -> Quantity:
+        return self._view.xyz[0]
+
+
+    @xyz.setter
+    def xyz(self, value: Quantity) -> None:
+        self._view.xyz[0,:] = value
+
+
+    @property
+    def x(self) -> Quantity:
+        return self._view.x[0]
+
+
+    @x.setter
+    def x(self, value: Quantity) -> None:
+        self._view.x[0] = value
+
+
+    @property
+    def y(self) -> Quantity:
+        return self._view.y[0]
+
+
+    @y.setter
+    def y(self, value: Quantity) -> None:
+        self._view.y[0] = value
+
+
+    @property
+    def z(self) -> Quantity:
+        return self._view.z[0]
+
+
+    @z.setter
+    def z(self, value: Quantity) -> None:
+        self._view.z[0] = value
+
+
+class CartesianCoordinates(Coordinates,
+                           CartesianCoordinatesView,
+                           CartesianCoordinatesArray):
     @classmethod
     def new(cls, xyz: Union[Quantity, ndarray, Sequence],
                  frame: Frame=ECEF,
@@ -173,49 +244,9 @@ class CartesianCoordinates(Coordinates, CartesianCoordinatesArray):
         if xyz.size != 3:
             raise ValueError('invalid data size')
         self = cls(xyz.units, frame)
-        self._views.xyz.magnitude[:] = xyz.magnitude
+        self._view.xyz.magnitude[:] = xyz.magnitude
 
         return self
-
-
-    @property
-    def xyz(self) -> Quantity:
-        return self._views.xyz[0]
-
-
-    @xyz.setter
-    def xyz(self, value: Quantity) -> None:
-        self._views.xyz[0,:] = value
-
-
-    @property
-    def x(self) -> Quantity:
-        return self._views.x[0]
-
-
-    @x.setter
-    def x(self, value: Quantity) -> None:
-        self._views.x[0] = value
-
-
-    @property
-    def y(self) -> Quantity:
-        return self._views.y[0]
-
-
-    @y.setter
-    def y(self, value: Quantity) -> None:
-        self._views.y[0] = value
-
-
-    @property
-    def z(self) -> Quantity:
-        return self._views.z[0]
-
-
-    @z.setter
-    def z(self, value: Quantity) -> None:
-        self._views.z[0] = value
 
 
 class CartesianPoint(CartesianCoordinates):
@@ -226,13 +257,39 @@ class CartesianVector(CartesianCoordinates):
     _type = lib.GRAND_COORDINATES_VECTOR
 
 
-class _SphericalViews(NamedTuple):
-    r: Quantity
-    theta: Quantity
-    phi: Quantity
+class SphericalView:
+    class _SphericalViewData(NamedTuple):
+        r: Quantity
+        theta: Quantity
+        phi: Quantity
 
 
-class SphericalCoordinatesArray(CoordinatesArray):
+    def _set_view(self, units: Tuple[Quantity]):
+        r = Quantity(self._data[::3], units[0])
+        theta = Quantity(self._data[1::3], units[1])
+        phi = Quantity(self._data[2::3], units[2])
+        self._view = self._SphericalViewData(r, theta, phi)
+
+
+class SphericalCoordinatesArrayView(SphericalView):
+    @property
+    def r(self) -> Quantity:
+        return self._view.r
+
+
+    @property
+    def theta(self) -> Quantity:
+        return self._view.theta
+
+
+    @property
+    def phi(self) -> Quantity:
+        return self._view.phi
+
+
+
+class SphericalCoordinatesArray(CoordinatesArray,
+                                SphericalCoordinatesArrayView):
     _system = lib.GRAND_COORDINATES_SPHERICAL
     _type = lib.GRAND_COORDINATES_UNDEFINED_TYPE
 
@@ -248,9 +305,9 @@ class SphericalCoordinatesArray(CoordinatesArray):
         r, theta, phi = cls._as_quantity(r, theta, phi, units)
 
         self = cls((r.units, theta.units, phi.units), r.size, frame)
-        self._views.r.magnitude[:] = r.magnitude
-        self._views.theta.magnitude[:] = theta.magnitude
-        self._views.phi.magnitude[:] = phi.magnitude
+        self._view.r.magnitude[:] = r.magnitude
+        self._view.theta.magnitude[:] = theta.magnitude
+        self._view.phi.magnitude[:] = phi.magnitude
 
         return self
 
@@ -300,29 +357,7 @@ class SphericalCoordinatesArray(CoordinatesArray):
                        frame: Frame=ECEF):
 
         super().__init__(size, self._type, self._system, frame)
-        self._set_views(units)
-
-
-    def _set_views(self, units: Tuple[Quantity]):
-        r = Quantity(self._data[::3], units[0])
-        theta = Quantity(self._data[1::3], units[1])
-        phi = Quantity(self._data[2::3], units[2])
-        self._views = _SphericalViews(r, theta, phi)
-
-
-    @property
-    def r(self) -> Quantity:
-        return self._views.r
-
-
-    @property
-    def theta(self) -> Quantity:
-        return self._views.theta
-
-
-    @property
-    def phi(self) -> Quantity:
-        return self._views.phi
+        self._set_view(units)
 
 
 class SphericalPoints(SphericalCoordinatesArray):
@@ -333,7 +368,40 @@ class SphericalVectors(SphericalCoordinatesArray):
     _type = lib.GRAND_COORDINATES_VECTOR
 
 
-class SphericalCoordinates(Coordinates, SphericalCoordinatesArray):
+class SphericalCoordinatesView(SphericalView):
+    @property
+    def r(self) -> Quantity:
+        return self._view.r[0]
+
+
+    @r.setter
+    def r(self, value: Quantity) -> None:
+        self._view.r[0] = value
+
+
+    @property
+    def theta(self) -> Quantity:
+        return self._view.theta[0]
+
+
+    @theta.setter
+    def theta(self, value: Quantity) -> None:
+        self._view.theta[0] = value
+
+
+    @property
+    def phi(self) -> Quantity:
+        return self._view.phi[0]
+
+
+    @phi.setter
+    def phi(self, value: Quantity) -> None:
+        self._view.phi[0] = value
+
+
+class SphericalCoordinates(Coordinates,
+                           SphericalCoordinatesView,
+                           SphericalCoordinatesArray):
     @classmethod
     def new(cls, r: Union[Quantity, float],
                  theta: Union[Quantity, float],
@@ -354,41 +422,11 @@ class SphericalCoordinates(Coordinates, SphericalCoordinatesArray):
                 r, theta, phi = r[0], theta[0], phi[0]
 
         self = cls((r.units, theta.units, phi.units), frame)
-        self._views.r.magnitude[0] = r.magnitude
-        self._views.theta.magnitude[0] = theta.magnitude
-        self._views.phi.magnitude[0] = phi.magnitude
+        self._view.r.magnitude[0] = r.magnitude
+        self._view.theta.magnitude[0] = theta.magnitude
+        self._view.phi.magnitude[0] = phi.magnitude
 
         return self
-
-
-    @property
-    def r(self) -> Quantity:
-        return self._views.r[0]
-
-
-    @r.setter
-    def r(self, value: Quantity) -> None:
-        self._views.r[0] = value
-
-
-    @property
-    def theta(self) -> Quantity:
-        return self._views.theta[0]
-
-
-    @theta.setter
-    def theta(self, value: Quantity) -> None:
-        self._views.theta[0] = value
-
-
-    @property
-    def phi(self) -> Quantity:
-        return self._views.phi[0]
-
-
-    @phi.setter
-    def phi(self, value: Quantity) -> None:
-        self._views.phi[0] = value
 
 
 class SphericalPoint(SphericalCoordinates):

@@ -3,6 +3,14 @@
 #include "coordinates.h"
 
 
+static struct grand_frame _ecef = {
+        {0, 0, 0},
+        {1, 0, 0, 0, 1, 0, 0, 0, 1}
+};
+
+struct grand_frame * GRAND_ECEF = &_ecef;
+
+
 void grand_coordinates_array_create(
     struct grand_coordinates_array ** coordinates,
     enum grand_coordinates_type type,
